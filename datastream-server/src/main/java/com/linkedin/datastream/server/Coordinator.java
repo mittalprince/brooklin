@@ -1362,6 +1362,7 @@ public class Coordinator implements ZkAdapter.ZkAdapterListener, MetricsAware {
       return;
     }
 
+    boolean anyDatastreamReady = false;
     for (Datastream ds : allStreams) {
       if (ds.getStatus() == DatastreamStatus.INITIALIZING) {
         try {
@@ -1379,6 +1380,7 @@ public class Coordinator implements ZkAdapter.ZkAdapterListener, MetricsAware {
             shouldRetry = true;
           } else {
             recordStreamProvisioningTime(ds);
+            anyDatastreamReady = true;
           }
         } catch (Exception e) {
           _log.warn("Failed to update the destination of new datastream {}", ds, e);
@@ -1390,6 +1392,17 @@ public class Coordinator implements ZkAdapter.ZkAdapterListener, MetricsAware {
 
         hardDeleteDatastream(ds, activeStreams);
       }
+    }
+
+    if (anyDatastreamReady) {
+      // A newly READY datastream may be a "dedup" datastream that reuses the task(s) of an existing,
+      // already-assigned datastream (same taskPrefix/partitions). In that case, the assignment (task names)
+      // does not change, so the normal assignment diff/rebalance path never touches the affected task's ZK
+      // node and the task's cached _datastreams list on every instance goes stale (see getDatastreams()
+      // javadoc). Explicitly broadcast so every live instance re-reads datastream groups and refreshes the
+      // datastreams list of its already-assigned tasks via onDatastreamUpdate(), the same way an explicit
+      // datastream update/pause-partitions call already does today.
+      broadcastDatastreamUpdate();
     }
 
     if (shouldRetry) {
